@@ -1,0 +1,86 @@
+DROP SCHEMA IF EXISTS reporting CASCADE;
+CREATE SCHEMA reporting;
+
+CREATE OR REPLACE VIEW reporting.flight as
+SELECT
+    *,
+    case 
+        when f.dep_delay_new > 15 then 1
+        else 0
+    end as is_delayed
+FROM
+    public.flight as f
+WHERE f.cancelled = 0 
+;
+
+CREATE OR REPLACE VIEW reporting.top_reliability_roads AS
+WITH cte as ( 
+SELECT
+    f.origin_airport_id,
+    f.dest_airport_id,
+    f.year,
+    count(1) as flights_amount,
+    avg(f.is_delayed)as reliability
+FROM
+    reporting.flight as f
+GROUP BY
+    f.origin_airport_id,
+    f.dest_airport_id,
+    f.year
+HAVING 
+    COUNT(1) > 10000
+)
+SELECT
+    c.origin_airport_id,
+    al1.name as origin_airport_name,
+
+    c.dest_airport_id,
+    al2.name as dest_airport_name,
+
+    c.year,
+    c.flights_amount,
+    c.reliability,
+
+    DENSE_RANK() OVER (ORDER BY c.reliability DESC) as nb
+FROM 
+        cte as c
+    INNER JOIN
+        airport_list as al1 on c.origin_airport_id = al1.origin_airport_id
+    INNER JOIN
+        airport_list as al2 on c.dest_airport_id = al2.origin_airport_id
+;
+
+CREATE OR REPLACE VIEW reporting.year_to_year_comparision AS
+SELECT 
+    f.month,
+    f.year,
+    avg(is_delayed) as reliability
+FROM reporting.flight as f
+GROUP BY 
+    f.month,
+    f.year
+;
+/*
+Tutaj napisz definicję widoku reporting.day_to_day_comparision, który będzie zawierał następujące kolumny:
+- `year`
+- `day_of_week`
+- `flights_amount`
+*/
+CREATE OR REPLACE VIEW reporting.day_to_day_comparision AS
+SELECT 
+    f.year,
+    f.day_of_week,
+    avg(is_delayed) as reliability
+FROM reporting.flight as f
+GROUP BY 
+    f.year,
+    f.day_of_week
+;
+
+CREATE OR REPLACE VIEW reporting.day_by_day_reliability AS
+SELECT 
+    to_date(f.year::VARCHAR || LPAD(f.month::VARCHAR, 2, '0') || LPAD(f.day_of_month::VARCHAR, 2, '0'), 
+            'YYYYMMDD') as flight_date,
+    avg(is_delayed) as reliability
+FROM reporting.flight as f
+GROUP BY 1

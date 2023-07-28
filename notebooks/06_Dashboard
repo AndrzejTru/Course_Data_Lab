@@ -1,0 +1,201 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+import plotly.express as px
+import pandas as pd
+from dash import Dash
+from dash import dash_table, html, dcc
+from dash import callback, Input, Output
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+top_routes_df = pd.read_sql(
+    'select * from reporting.top_reliability_roads',
+    con=con
+)
+top_routes_df.head()
+
+top_routes_df['reliability'] = (
+    top_routes_df['reliability'].apply(
+        lambda x: '{:.2f}%'.format(x*100)
+    )
+)
+
+columns = {
+    'origin_airport_name': 'Origin',
+    'dest_airport_name': 'Destination',
+    'year': 'Year',
+    'reliability': 'Reliability',
+    'nb': 'Rank'
+}
+top_routes_df.rename(columns=columns, inplace=True)
+
+yoy_comparision_df = pd.read_sql(
+    sql='select * from reporting.year_to_year_comparision',
+    con=con
+)
+
+yoy_comparision_to_plot_df = yoy_comparision_df.pivot(
+    index='month',
+    columns='year',
+    values='reliability'
+)
+
+day_by_day_reliability_fig_labels = {
+    "month": "Month",
+    "value": "Reliability",
+    "variable": "Year"
+}
+
+yoy_comparision_fig = px.bar(
+    yoy_comparision_to_plot_df,
+    x=yoy_comparision_to_plot_df.index,
+    y=[2019, 2020],
+    barmode="group",
+    labels=day_by_day_reliability_fig_labels,
+    title="YoY comparision of flight reliability",
+)
+yoy_comparision_fig.update_layout(hovermode="x")
+yoy_comparision_fig.update_xaxes(type='category')
+
+yoy_comparision_fig.update_yaxes(tickformat='.0%', dtick=0.05)
+yoy_comparision_fig.update_xaxes(
+    tickmode='array',
+    tickvals=list(range(1, 13)),
+    ticktext=['January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December']
+)
+
+day_to_day_comparision_df = pd.read_sql(
+    sql='select * from reporting.day_to_day_comparision',
+    con=con
+)
+
+day_to_day_comparision_to_plot_df = day_to_day_comparision_df.pivot(
+    index='day_of_week',
+    columns='year',
+    values='reliability'
+)
+
+day_by_day_reliability_fig_labels = {
+    "month": "Month",
+    "value": "Reliability",
+    "variable": "Year"
+}
+
+day_to_day_comparision_fig = px.bar(
+    day_to_day_comparision_to_plot_df,
+    x=day_to_day_comparision_to_plot_df.index,
+    y=[2019, 2020],
+    barmode="group",
+    labels=day_by_day_reliability_fig_labels,
+    title="WKoWK comparision of flight reliability",
+)
+day_to_day_comparision_fig.update_layout(hovermode="x")
+day_to_day_comparision_fig.update_xaxes(type='category')
+
+day_to_day_comparision_fig.update_yaxes(tickformat='.0%', dtick=0.05)
+day_to_day_comparision_fig.update_xaxes(
+    tickmode='array',
+    tickvals=list(range(1, 8)),
+    ticktext=['Monday', 'Tuesday', 'Wednesday',
+              'Thursday', 'Friday', 'Saturday', 'Sunday']
+)
+
+day_by_day_reliability_df = pd.read_sql(
+    sql='select * from reporting.day_by_day_reliability',
+    con=con,
+    parse_dates='flight_date'
+)
+day_by_day_reliability_df.head()
+
+day_by_day_reliability_fig_labels = {
+    "flight_date": "Date",
+    "reliability": "Reliability",
+    "color": "Year"
+}
+
+day_by_day_reliability_fig = px.line(
+    day_by_day_reliability_df,
+    x='flight_date',
+    y='reliability',
+    color=day_by_day_reliability_df['flight_date'].dt.year,
+    title='Day by day flight reliability',
+    labels=day_by_day_reliability_fig_labels
+)
+
+day_by_day_reliability_fig.update_yaxes(tickformat='.0%', dtick=0.05)
+
+day_by_day_reliability_fig.show()
+
+top_routes_table = dash_table.DataTable(
+    id='top-routes',
+    data=top_routes_df[columns.values()].to_dict('records'),
+)
+
+top_routes_page_title = html.H3(
+    "TOP 10 reliability routes in 2019 and 2020",
+    style={"fontFamily": "verdana", "color": "#444"}
+)
+
+top_routes_page_layout = html.Div(
+    children=[
+        top_routes_page_title,
+        top_routes_table
+    ])
+
+yoy_comparision_component = dcc.Graph(
+    id='yoy_comparision_fig',
+    figure=yoy_comparision_fig
+)
+
+day_to_day_comparision_component = dcc.Graph(
+    id='day_to_day_comparision_fig',
+    figure=day_to_day_comparision_fig
+)
+
+comparision_layout = html.Div(children=[
+    yoy_comparision_component,
+    day_to_day_comparision_component
+])
+
+top_report_link = dcc.Link(html.Button('TOP report'), href='/')
+yoy_report_link = dcc.Link(html.Button(
+    'Comparision'), href='/comparision_reporting')
+dbd_report_link = dcc.Link(html.Button('Day by day reliability'),
+                           href='/day_by_day_reporting')
+
+links_layout = html.Div([
+    top_report_link,
+    yoy_report_link,
+    dbd_report_link])
+
+app_layout = [
+    dcc.Location(id='url', refresh=False),
+    links_layout,
+    html.Div(id='page-content')
+]
+
+@ callback(
+    Output('page-content', 'children'),
+    Input('url', 'pathname'))
+def display_page(pathname):
+
+    if pathname == "/comparision_reporting":
+        return comparision_layout
+    elif pathname == '/day_by_day_reporting':
+        return day_by_day_layout
+    else:
+        return top_routes_page_layout

@@ -1,0 +1,153 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+import pandas as pd
+import matplotlib.pyplot as plt
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+url = URL.create(
+    "postgresql+psycopg2",
+    username=user_name,
+    password=passwd,
+    host=hostname,
+    database=db_name,
+) 
+
+engine = create_engine(url)
+
+def read_sql_table(table_name):
+    print(f'Dane z tabeli {table_name}')
+
+    df = pd.read_sql(table_name, engine)
+    return df
+
+flight_df = pd.read_csv(
+    '../data/processed/flight_df_01.csv', 
+    sep=';')
+
+flight_df_expected_rows_amount = 1057391
+flight_df_rows_amount = flight_df.shape[0]
+
+assert flight_df_rows_amount == flight_df_expected_rows_amount, f'Oczekiwano {flight_df_expected_rows_amount} wierszy, otrzymano {flight_df_rows_amount}'
+
+aircraft_df = read_sql_table('aircraft')
+
+aircraft_df = aircraft_df[['tail_num', 'manufacture_year']].drop_duplicates()
+
+aircraft_df_expected_rows = 7364
+aircraft_df_expected_columns = set(['tail_num', 'manufacture_year'])
+
+aircraft_df_rows = aircraft_df.shape[0]
+
+diff = aircraft_df_expected_columns.symmetric_difference(set(aircraft_df.columns))
+assert aircraft_df_rows == aircraft_df_expected_rows, f'Spodziewano się {aircraft_df_expected_rows} wierszy , otrzymano {aircraft_df_rows} wierszy'
+
+assert diff == set([]), f'Spodziewano się {aircraft_df_expected_columns} kolumn, otrzymano: {aircraft_df_expected_columns} kolumn. Różnica: \n\t{diff}'
+
+aircraft_df_is_duplicated = aircraft_df.duplicated(subset='tail_num')
+aircraft_df_duplicated = aircraft_df.loc[aircraft_df_is_duplicated]
+
+aircraft_df_expected_rows = 3
+aircraft_df_duplicated_rows = aircraft_df_duplicated.shape[0]
+assert aircraft_df_duplicated_rows == aircraft_df_expected_rows, f"Oczekiwano {aircraft_df_expected_rows} wierszy, otrzymano {aircraft_df_duplicated_rows}"
+
+aircraft_df = (aircraft_df
+               .groupby(by='tail_num', as_index=False)['manufacture_year']
+               .max()
+               )
+aircraft_df
+
+test_tail = 'N783CA'
+test_value = aircraft_df.loc[aircraft_df['tail_num']
+                             == test_tail]['manufacture_year']
+test_value = int(test_value)
+
+expected_value = 2000
+assert test_value == expected_value, f"Dla 'tail_num' == '{test_tail}' oczekiwano {expected_value} otrzymano {test_value}"
+
+tmp_flight_df = pd.merge(
+    left=flight_df,
+    right=aircraft_df,
+    how='left',
+    on='tail_num'
+)
+
+flight_df.shape[0] == tmp_flight_df.shape[0]
+
+flight_df = tmp_flight_df.copy()
+
+delays_by_manufacture_year_df = (flight_df
+                                 .groupby(by='manufacture_year', as_index=False)
+                                 .agg({'is_delayed': ['mean', 'size']})
+                                 )
+delays_by_manufacture_year_df
+
+plt.scatter(
+    x=delays_by_manufacture_year_df['manufacture_year'],
+    y=delays_by_manufacture_year_df[('is_delayed', 'mean')],
+    c=delays_by_manufacture_year_df[('is_delayed', 'size')]
+)
+
+delays_by_manufacture_year_df_over_10000 = delays_by_manufacture_year_df[
+    ('is_delayed', 'size')] > 10000
+to_plot = delays_by_manufacture_year_df.loc[delays_by_manufacture_year_df_over_10000]
+
+plt.figure(figsize=(15, 10))
+
+plt.scatter(
+    x=to_plot['manufacture_year'],
+    y=to_plot[('is_delayed', 'mean')],
+    c=to_plot[('is_delayed', 'size')]
+)
+
+plt.title("Odsetek opóźnień w zależności od roku produkcji samolotu")
+plt.ylabel("Odsetek opóźnień")
+
+plt.xticks(rotation=45)
+plt.xlabel("Rok produkcji samolotu")
+
+flight_df['manufacture_year_agg'] = pd.cut(
+    x=flight_df['manufacture_year'],
+    bins=range(1990, 2021, 3)
+)
+
+flight_delays_by_manufacture_year_agg_df = (flight_df
+                                     .groupby(by='manufacture_year_agg')['is_delayed']
+                                     .agg(['mean', 'size'])
+                                     )
+flight_delays_by_manufacture_year_agg_df
+
+plt.figure(figsize=(15, 10))
+
+plt.scatter(
+    x=flight_delays_by_manufacture_year_agg_df.index.astype(str),
+    y=flight_delays_by_manufacture_year_agg_df['mean'],
+    c=flight_delays_by_manufacture_year_agg_df['size']
+)
+
+plt.title("Odsetek opóźnień w zależności od roku produkcji samolotu")
+plt.ylabel("Odsetek opóźnień")
+
+plt.xticks(rotation=45)
+plt.xlabel("Rok produkcji samolotu")
+
+top_manufactured_df = (delays_by_manufacture_year_df
+                       .sort_values(by=[('is_delayed', 'size')], ascending=False)
+                       .head(5)
+                       )
+top_manufactured_df
+
+flight_df.to_csv('../data/processed/flight_df_02.csv', sep=';')

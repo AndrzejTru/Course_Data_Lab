@@ -1,0 +1,64 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+url = URL.create(
+    "postgresql+psycopg2",
+    username=user_name,
+    password=passwd, 
+    host=hostname,
+    database=db_name,
+) 
+
+engine = create_engine(url)
+
+fd = open('../sql/reporting.sql','r')
+reporting_file = fd.read()
+fd.close()
+
+sql_reporting_Commands = reporting_file.split(';')
+
+for sql_reporting_Command in sql_reporting_Commands:
+    cursor.execute(sql_reporting_Command)
+
+con.commit()
+con.close()
+
+# Ten kod chyba wygląda znajomo....
+# istnienie widoków możemy sprawdzić tak samo jak tabele
+def check_if_table_exists(table_name):
+    msg = f"Sprawdzam, czy istnieje tabela {table_name}"
+    print(msg)
+
+    query = f"select 1 from {table_name}"
+    cursor.execute(query)
+    print('OK!')
+
+views_to_test = [
+    'reporting.flight',
+    'reporting.top_reliability_roads',
+    'reporting.year_to_year_comparision',
+    'reporting.day_to_day_comparision',
+    'reporting.day_by_day_reliability'
+]
+
+for view in views_to_test:
+    check_if_table_exists(view)
+
+con.close()
+msg = "Wszystko wygląda OK :) Możesz przejść do kolejnego zadania."
+print(msg)

@@ -1,0 +1,159 @@
+import pandas as pd
+import requests
+import json
+
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from time import sleep
+
+endpoint_url = 'https://dev-apidatalab.coderslab.pl/api/v2'
+token = 'WpzDMZeeCq6tbPdsTHUX8W9mecuUVwXAnmcorefr'
+request_offset = 0.3
+
+authorization = {'authorization': token}
+
+airport_list = pd.read_csv('../data/airports.csv')
+airports = airport_list['origin_airport_id'].values.tolist()
+
+airport_endpoint_url = f"{endpoint_url}/airport"
+
+airport_data = []
+for airport_id in airports:
+    sleep(request_offset)
+
+    r = requests.get(
+        f"{airport_endpoint_url}/{airport_id}",
+        headers=authorization,
+    )
+
+    if r.status_code != 200:
+        continue
+
+    response = json.loads(r.text)
+    airport_data.append(response)
+
+airport_df = pd.DataFrame.from_records(airport_data)
+airport_df.head()
+
+airport_df_expected_shape = (97, 4)
+assert airport_df_expected_shape == airport_df.shape
+
+airport_df.to_csv(
+    '../data/raw/airport_list.csv', 
+    sep=';',
+    index=False)
+
+months_amount = 15
+start_date = datetime(2019, 1, 1)
+airport_weather_endpoint_url = f"{endpoint_url}/airportWeather"
+
+def get_weather_data(date):
+    r = requests.get(
+        airport_weather_endpoint_url,
+        headers=authorization,
+        params={'date': date.strftime('%Y-%m')}
+    )
+
+    print(date.strftime('%Y-%m'))
+    response = json.loads(r.text)
+
+    return response
+
+airport_weather_data = []
+
+for month in range(months_amount):
+    print(f"Pobiernie {month+1} z {months_amount}")
+    date = start_date + relativedelta(months=month)
+    daily_weather = get_weather_data(date)
+    print(len(daily_weather))
+
+    airport_weather_data += daily_weather
+    sleep(request_offset)
+
+airport_weather_df = pd.DataFrame.from_records(airport_weather_data)
+airport_weather_df.head()
+
+airport_weather_df_expected_shape = (46226, 33)
+assert airport_weather_df_expected_shape == airport_weather_df.shape
+
+airport_weather_df.to_csv(
+    '../data/raw/airport_weather.csv', 
+    sep=';',
+    index=False)
+
+aircraft_endpoint_url = f"{endpoint_url}/aircraft"
+r = requests.get(aircraft_endpoint_url, headers=authorization)
+data = json.loads(r.text)
+
+aircraft_df = pd.DataFrame.from_records(data)
+aircraft_df.head()
+
+aircraft_df_expected_shape = (7383, 3)
+assert aircraft_df_expected_shape == aircraft_df.shape
+
+aircraft_df.to_csv(
+    '../data/raw/aircraft.csv', 
+    sep=';',
+    index=False)
+
+flight_endpoint_url = f"{endpoint_url}/flight"
+
+def get_airport_data(airport_id):
+    result = []
+    start_date = datetime(2019, 1, 1)
+
+    for month in range(months_amount):
+        date = start_date + relativedelta(months=month)
+        print(f"\t{date}")
+
+        try:
+            response = get_airport_day_data(airport_id, date)
+            result += response
+
+            sleep(request_offset)
+        except ValueError as e:
+            print(f"No data available for airport {airport_id}")
+            break
+
+    return result
+
+
+def get_airport_day_data(airport_id, date):
+    payload = {
+        'airportId': airport_id,
+        'date': date.strftime('%Y-%m')
+    }
+
+    r = requests.get(
+        flight_endpoint_url,
+        headers=authorization,
+        params=payload)
+
+    if r.status_code == 204:
+        raise ValueError("No data available")
+
+    response = json.loads(r.text)
+    return response
+
+flight = []
+airports_to_download = airport_df['ORIGIN_AIRPORT_ID'].to_list()
+airports_amount = len(airports)
+
+for idx, airport in enumerate(airports):
+    print(f"{airport}: {idx} of {airports_amount}")
+    airport_flight = get_airport_data(airport)
+    flight += airport_flight
+
+flight_df = pd.DataFrame.from_records(flight)
+flight_df.head()
+
+flight_df_expected_shape = (1386120, 27)
+assert flight_df_expected_shape == flight_df.shape
+
+flight_df.to_csv(
+    '../data/raw/flight.csv', 
+    sep=';',
+    index=False)
+
+msg = "Wszystko wygląda OK :) Możesz przejść do kolejnego kroku."
+print(msg)

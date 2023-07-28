@@ -1,0 +1,51 @@
+import psycopg2
+
+username = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=username,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+fd = open('../sql/database_schema.sql','r')
+sql_file = fd.read()
+fd.close()
+
+sql_commands = sqlFile.split(';')
+sql_commands
+
+for sql_command in sql_commands:
+    cursor.execute(sql_command)
+
+con.commit()
+con.close()
+
+def check_if_table_exists(table_name):
+    msg = f"Sprawdzam czy istnieje tabela {table_name}"
+    print(msg)
+
+    query = f"select 1 from {table_name}"
+    # jeżeli tabela nie istnieje, ten krok zwróci wyjątek
+    cursor.execute(query)
+    print('OK!')
+
+tables_to_test = [
+    'aircraft',
+    'airport_weather',
+    'flight',
+    'airport_list'
+]
+
+for table in tables_to_test:
+    check_if_table_exists(table)
+
+con.close()
+msg = "Wszystko wygląda OK :) Możesz przejść do kolejnego zadania."
+print(msg)

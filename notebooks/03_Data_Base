@@ -1,0 +1,111 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+import os
+import pandas as pd
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+url = URL.create(
+    "postgresql+psycopg2",
+    username=user_name,
+    password=passwd,
+    host=hostname,
+    database=db_name,
+) 
+
+engine = create_engine(url)
+
+def load_raw_data(file_name):
+    df = pd.read_csv(file_name, sep=';')
+    df.rename(columns=str.lower, inplace=True)
+    return df
+
+aircraft_df = load_raw_data('../data/raw/aircraft.csv')
+flight_df = load_raw_data('../data/raw/flight.csv')
+airport_weather_df = load_raw_data('../data/raw/airport_weather.csv')
+airport_list_df = load_raw_data('../data/raw/airport_list.csv')
+
+def export_table_to_db(df, table_name):
+    msg = f"Ladowanie danych do {table_name}"
+    print(msg)
+    batch_size = 10**5
+    df.to_sql(
+        name=table_name,
+        if_exists='append',
+        con=engine,
+        chunksize=batch_size,
+        index=False
+    )
+
+    print("Zaladowany!")
+
+export_table_to_db(aircraft_df, 'aircraft')
+export_table_to_db(airport_weather_df, 'airport_weather')
+export_table_to_db(flight_df, 'flight')
+export_table_to_db(airport_list_df, 'airport_list')
+
+def test_data_export(table_name, expected_count, expected_schema):
+    real_count = pd.read_sql(f"SELECT COUNT(*) as cnt FROM {table_name}", engine).iloc[0][0]
+    
+    real_schema = pd.read_sql(f"SELECT * FROM {table_name} LIMIT 0", engine)
+    real_schema = set(real_schema.columns)
+
+    expected_schema = set(expected_schema)
+
+    diff = real_schema.symmetric_difference(expected_schema)
+
+    assert len(diff) == 0, ('Nie zgadzają się kolumny tabel....'
+    f'\tOczekiwano: {expected_schema}'
+    f'\tOtrzymano: {real_schema}'
+    f'\tRóżnica: {diff}')
+
+    assert expected_count == real_count, \
+        f'Nie zgadza się liczba wierszy, oczekiwano {expected_count}, otrzymano {real_count} - sprawdź, czy nie dane nie zostały wgrane do tabeli "{table_name}" więcej niż raz.'
+
+aircraft_expected_count = 7383
+aircraft_expected_schema = ['id', 'manufacture_year', 'tail_num', 'number_of_seats']
+
+test_data_export('aircraft', aircraft_expected_count, aircraft_expected_schema)
+
+airport_weather_expected_count = 46226
+airport_weather_expected_schema = [
+       'id', 'station', 'name', 'date', 'awnd', 'prcp', 'snow', 'snwd', 'tavg', 
+       'tmax', 'tmin', 'wdf2', 'wdf5', 'wsf2', 'wsf5', 'wt01', 'wt08', 'wt02',
+       'wt03', 'wt04', 'wt09', 'wt06', 'wt05', 'pgtm', 'wt10', 'wesd', 'sn32',
+       'sx32', 'psun', 'tsun', 'tobs', 'wt07', 'wt11', 'wt18']
+
+test_data_export('airport_weather', airport_weather_expected_count, airport_weather_expected_schema)
+
+flight_expected_count = 1386120
+flight_expected_schema = [
+       'id', 'month', 'day_of_month', 'day_of_week', 'op_unique_carrier', 'tail_num',
+       'op_carrier_fl_num', 'origin_airport_id', 'dest_airport_id',
+       'crs_dep_time', 'dep_time', 'dep_delay_new', 'dep_time_blk',
+       'crs_arr_time', 'arr_time', 'arr_delay_new', 'arr_time_blk',
+       'cancelled', 'crs_elapsed_time', 'actual_elapsed_time', 'distance',
+       'distance_group', 'year', 'carrier_delay', 'weather_delay', 'nas_delay',
+       'security_delay', 'late_aircraft_delay']
+
+test_data_export('flight', flight_expected_count, flight_expected_schema)
+
+airport_list_expected_count = 97
+airport_list_expected_schema = ['id', 'origin_airport_id', 'display_airport_name', 'origin_city_name', 'name']
+
+test_data_export('airport_list', airport_list_expected_count, airport_list_expected_schema)
+
+msg = "Wszystko wygląda OK :) Możesz przejść do kolejnego kroku."
+print(msg)
+

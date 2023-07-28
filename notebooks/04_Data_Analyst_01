@@ -1,0 +1,269 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+import pandas as pd
+import matplotlib.pyplot as plt
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+url = URL.create(
+    "postgresql+psycopg2",
+    username=user_name,
+    password=passwd,
+    host=hostname,
+    database=db_name,
+) 
+
+engine = create_engine(url)
+
+def read_sql_table(table_name):
+    print(f'Dane z tabeli {table_name}')
+
+    df = pd.read_sql(table_name, engine)
+    return df
+
+flight_df_raw = read_sql_table('flight')
+
+year_condition = flight_df_raw['year'] == 2019
+is_cancelled = flight_df_raw['cancelled'] == 0
+
+selector = year_condition & is_cancelled
+flight_df = flight_df_raw.loc[selector]
+
+flight_df.rename(
+    columns={'dep_delay_new': 'dep_delay'},
+    inplace=True
+)
+
+(flight_df_rows_amount, flight_df_columns_amount) = flight_df.shape
+
+flight_df_expected_columns_amount = 28
+assert flight_df_columns_amount == flight_df_expected_columns_amount, f'Oczekiwano {flight_df_expected_columns_amount} kolumn, otrzymano {flight_df_columns_amount}'
+
+flight_df_expected_rows_amount = 1095742
+assert flight_df_rows_amount == flight_df_expected_rows_amount, f'Oczekiwano {flight_df_expected_rows_amount} wierszy, otrzymano {flight_df_rows_amount}'
+
+flight_df_year_test = flight_df.loc[flight_df['year'] == 2020].shape[0]
+assert flight_df_year_test == 0, 'W ramce `flight_df` nadal znajdują się loty z 2020 roku'
+
+flight_df_cancelled_test = flight_df.loc[flight_df['cancelled'] != 0].shape[0]
+assert flight_df_cancelled_test == 0, 'W ramce `flight_df` nadal znajdują się anulowane loty'
+
+assert 'dep_delay' in flight_df.columns, 'Kolumna dep_delay nie została znaleziona w ramce flight_df'
+
+percentiles = [0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99]
+dep_delay_statistics_df = (flight_df['dep_delay']
+                           .describe(percentiles=percentiles)
+                           .round(2)
+                           )
+
+expected = {'count': 1095742.0, 'mean': 14.77, 'std': 46.49, 
+            'min': 0.0, '10%': 0.0, '25%': 0.0, '50%': 0.0, 
+            '75%': 8.0, '90%': 42.0, '95%': 81.0, '99%': 206.0, 'max': 1959.0}
+dep_delay_statistics_dict = dep_delay_statistics_df.to_dict()
+
+assert dep_delay_statistics_dict == expected, f'Błąd. Otrzymano wartości : {dep_delay_statistics_dict}'
+
+max_dep_delay = int(flight_df['dep_delay'].max())
+bins = range(0, max_dep_delay, 10)
+
+dep_delays = flight_df['dep_delay']
+
+plt.figure(figsize=(15, 10))
+
+plt.hist(
+    x=dep_delays,
+    density=True,
+    bins=bins
+)
+
+plt.title("Rozkład opóźnienia samolotów w minutach w 2019 roku")
+plt.ylabel("Ilość")
+plt.xlabel("Wielkość opóźnienia")
+
+plt.figure(figsize=(15, 10))
+plt.hist(
+    x=dep_delays[dep_delays > 0],
+    density=True,
+    bins=bins
+)
+
+plt.title("Rozkład opóźnienia samolotów w minutach w 2019 roku\nZ pominięciem lotów bez opóźnienia")
+plt.ylabel("Ilość")
+plt.xlabel("Wielkość opóźnienia")
+
+cutoff = int(dep_delay_statistics_df['95%'])
+bins_cutted = range(0, cutoff, 10)
+
+plt.figure(figsize=(15, 10))
+plt.hist(
+    x=dep_delays[(dep_delays > 0) & (dep_delays < cutoff)],
+    density=True,
+    bins=bins_cutted
+)
+
+plt.title("Rozkład opóźnienia samolotów w minutach w 2019 roku\nZ pominięciem lotów bez opóźnienia")
+plt.ylabel("Ilość")
+plt.xlabel("Wielkość opóźnienia")
+
+flight_df['is_delayed'] = 0
+flight_df.loc[flight_df['dep_delay'] > 15, 'is_delayed'] = 1
+
+delayed_ratio = flight_df['is_delayed'].mean()
+delayed_ratio = round(delayed_ratio, 2)
+
+delayed_ratio_expected = 0.19
+assert delayed_ratio == delayed_ratio_expected, f"Oczekiwanio {delayed_ratio_expected}, otrzymano {delayed_ratio}"
+
+flight_delays_by_month_df = (flight_df
+                             .groupby(by=['month'])['is_delayed']
+                             .mean()
+                             )
+flight_delays_by_month_df
+
+plt.figure(figsize=(15, 10))
+
+plt.bar(
+    x=range(1, 13),
+    height=flight_delays_by_month_df
+)
+
+plt.title("Odsetek opóźnień w 2019 roku w zależności od miesiąca kalendarzowego")
+plt.ylabel("Odsetek")
+plt.xlabel("Miesiąc kalendarzowy")
+
+flight_delays_by_weekday_df = (flight_df
+                               .groupby(by=['day_of_week'])['is_delayed']
+                               .mean()
+                               )
+flight_delays_by_weekday_df
+
+plt.figure(figsize=(15, 10))
+
+plt.bar(
+    x=range(1, 8),
+    height=flight_delays_by_weekday_df
+)
+
+plt.title("Odsetek opóźnień w 2019 roku w zależności od dnia tygodnia")
+plt.ylabel("Odsetek")
+plt.xlabel("Miesiąc kalendarzowy")
+
+flight_df["is_weekend"] = 1
+
+not_weekend = flight_df['day_of_week'] < 6
+flight_df.loc[not_weekend, 'is_weekend'] = 0
+
+flight_delays_by_weekend_df = (flight_df
+                               .groupby(by=['is_weekend'])['is_delayed']
+                               .mean()
+                               .round(2)
+                               )
+flight_delays_by_weekend_df
+
+plt.figure(figsize=(15, 10))
+
+plt.bar(
+    x=[0, 1],
+    height=flight_delays_by_weekend_df
+)
+
+plt.title("Odsetek opóźnień w 2019 roku w zależności czy lot odbywał się w weekend")
+plt.ylabel("Odsetek")
+plt.xlabel("Miesiąc kalendarzowy")
+
+expected_flight_df_by_weekend = {0: 0.19, 1: 0.18}
+assert flight_delays_by_weekend_df.to_dict(
+) == expected_flight_df_by_weekend, f'Spodziewano się wyników: {expected_flight_df_by_weekend}\n otrzymano  {flight_delays_by_weekend_df}'
+
+flight_distance_analysis_df = (flight_df['distance']
+                               .describe(percentiles=percentiles)
+                               .round(2)
+                               )
+flight_distance_analysis_df
+
+plt.figure(figsize=(15, 10))
+df_to_plot = flight_df.sample(n=10000)
+
+plt.scatter(
+    x=df_to_plot['distance'],
+    y=df_to_plot['dep_delay']
+)
+
+plt.title("Wielkość opóźnienia w zależności od długości trasy")
+plt.ylabel("Wielkość opóźnienia")
+plt.xlabel("Długość trasy")
+
+distance_cutoff = flight_distance_analysis_df['95%']
+distance_cutoff = int(distance_cutoff)
+
+flight_df = flight_df.loc[flight_df['distance'] <= distance_cutoff]
+
+flight_df_expected_rows_amount = 1057391
+flight_df_rows_amount = flight_df.shape[0]
+
+assert flight_df_rows_amount == flight_df_expected_rows_amount, f'Oczekiwano {flight_df_expected_rows_amount} wierszy, otrzymano {flight_df_rows_amount}'
+
+bins = range(0, distance_cutoff, 100)
+flight_df['distance_agg'] = pd.cut(flight_df['distance'], bins)
+
+flight_delays_by_distance_agg_df = (flight_df
+                                    .groupby(by=['distance_agg'])['is_delayed']
+                                    .mean()
+                                    )
+
+flight_delays_by_distance_agg_df
+
+plt.figure(figsize=(15, 10))
+
+plt.bar(
+    x=flight_delays_by_distance_agg_df.index.astype(str),
+    height=flight_delays_by_distance_agg_df
+)
+
+plt.title("Odsetek opóźnień w zależności od długości trasy")
+plt.ylabel("Odsetek opóźnień")
+
+plt.xticks(rotation=45)
+plt.xlabel("Długość trasy")
+
+assert 'distance_agg' in flight_df.columns, 'Nie odnaleziono kolumny distance_agg w ramce flight_df'
+
+flight_distance_by_distance_group = (flight_df
+                                     .groupby(by=['distance_group'])['distance']
+                                     .agg(['min', 'max'])
+                                     )
+flight_distance_by_distance_group
+
+flight_delays_by_distance_group_df = (flight_df
+                            .groupby(by=['distance_group'])['is_delayed']
+                            .mean()
+                            )
+flight_delays_by_distance_group_df
+
+plt.figure(figsize=(15, 10))
+
+plt.bar(
+    x=flight_delays_by_distance_group_df.index.astype(str),
+    height=flight_delays_by_distance_group_df
+)
+
+plt.title("Odsetek opóźnień w zależności od długości trasy")
+plt.ylabel("Odsetek opóźnień")
+
+plt.xticks(rotation=45)
+plt.xlabel("Długość trasy")
+
+flight_df.to_csv('../data/processed/flight_df_01.csv', sep=';')

@@ -1,0 +1,167 @@
+import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+import pandas as pd
+import matplotlib.pyplot as plt
+
+user_name = "postgres"
+passwd = "admin"
+hostname = "localhost"
+db_name = "airlines"
+
+con = psycopg2.connect(
+    host=hostname,
+    user=user_name,
+    password=passwd,
+    dbname=db_name,
+)
+
+cursor = con.cursor()
+
+url = URL.create(
+    "postgresql+psycopg2",
+    username=user_name,
+    password=passwd, 
+    host=hostname,
+    database=db_name,
+) 
+
+engine = create_engine(url)
+
+def read_sql_table(table_name):
+   print(f'Dane z tabeli {table_name}')
+
+    df = pd.read_sql(table_name, engine)
+    return df
+
+flight_df = pd.read_csv(
+    '../data/processed/flight_df_02.csv',
+    sep=';')
+
+airport_list_df = read_sql_table('airport_list')
+
+test = airport_list_df.drop_duplicates(subset='origin_airport_id').shape[0]
+test == airport_list_df.shape[0]
+
+flight_df = pd.merge(
+    left=flight_df,
+    right=airport_list_df[['origin_airport_id', 'origin_city_name']],
+    how='left',
+    on=['origin_airport_id']
+)
+
+tmp_airport_list_df = airport_list_df.rename(
+    columns={'origin_city_name': 'destination_city_name'})
+
+flight_df = pd.merge(
+    left=flight_df,
+    right=tmp_airport_list_df[['origin_airport_id', 'destination_city_name']],
+    how='left',
+    left_on=['dest_airport_id'],
+    right_on=['origin_airport_id']
+)
+
+flight_df = (flight_df
+             .drop(columns='origin_airport_id_y')
+             .rename(columns={'origin_airport_id_x': 'origin_airport_id'})
+             )
+
+assert 'origin_city_name' in flight_df.columns, 'Brak kolumny `origin_city_name` w ramce flight_df'
+assert 'destination_city_name' in flight_df.columns, 'Brak kolumny `destination_city_name` w ramce flight_df'
+
+flight_df_expected_rows_amount = 1057391
+assert flight_df.shape[0] == flight_df_expected_rows_amount, 'Ups, zmieniła się liczba wierszy...'
+
+top_airports_origin_df = (flight_df
+                          .groupby(by=['origin_airport_id']).size()
+                          )
+top_airports_origin_df
+
+top_airports_destination_df = (flight_df
+                               .groupby(by=['dest_airport_id']).size()
+                               )
+top_airports_destination_df
+
+top_airports_origin_head = (top_airports_origin_df
+                            .sort_values(ascending=False)
+                            .head()
+                            .to_list()
+                            )
+top_airports_origin_head = tuple(top_airports_origin_head)
+top_airports_origin_head_expected = (123162, 105437, 87849, 64525, 57708)
+
+assert top_airports_origin_head == top_airports_origin_head_expected, f"Nie zgadza się top 5 wierszy, oczekiwano wyników: {top_airports_origin_head_expected} otrzymano: {top_airports_origin_head}"
+
+top_airports_destination_head = (top_airports_destination_df
+                                 .sort_values(ascending=False)
+                                 .head()
+                                 .to_list()
+                                 )
+top_airports_destination_head = tuple(top_airports_destination_head)
+top_airports_destination_head_expected = (122945, 100333, 87776, 64602, 57686)
+
+assert top_airports_destination_head == top_airports_destination_head_expected, f"Nie zgadza się top 5 wierszy, oczekiwano wyników: {top_airports_destination_head_expected} otrzymano: {top_airports_destination_head}"
+
+airport_weather_df = read_sql_table('airport_weather')
+
+aiport_weather_df_columns = ['station', 'name',
+                             'date', 'prcp', 'snow', 'snwd', 'tmax', 'awnd']
+airport_weather_df = airport_weather_df[aiport_weather_df_columns]
+
+airport_weather_df = pd.merge(
+    left=airport_weather_df,
+    right=airport_list_df[['origin_airport_id', 'name']],
+    how='inner',
+    on='name'
+)
+
+airport_weather_df_expected_shape = (43394, 9)
+airport_weather_df_shape = airport_weather_df.shape
+
+assert airport_weather_df_expected_shape == airport_weather_df_shape, \
+  f'Nieodpowiedni wymiar ramki airport_weather_df, oczekiwano (wierszy, kolumn): {airport_weather_df_expected_shape}'
+
+airport_weather_df.sample(100).head(100)
+
+airport_weather_df['date'] = pd.to_datetime(
+    airport_weather_df['date'],
+    format='%Y-%m-%d'
+)
+
+flight_df['date'] = (flight_df['year'].astype(str)
+                     + '-' + flight_df['month'].astype(str)
+                     + '-' + flight_df['day_of_month'].astype(str)
+                     )
+flight_df['date'] = pd.to_datetime(flight_df['date'])
+
+flight_df = pd.merge(
+    left=flight_df,
+    right=airport_weather_df,
+    how='left',
+    on=['origin_airport_id', 'date']
+)
+
+flight_df_expected_rows_amount = 1057391
+assert flight_df.shape[0] == flight_df_expected_rows_amount, 'Ups, zmieniła się liczba wierszy...'
+
+flight_df['tmax'].describe().round(2)
+
+scope = flight_df
+percentiles = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99]
+scope['tmax'].describe(percentiles=percentiles).round(2)
+
+delay_by_tmax_df = scope.pivot_table(
+    index=pd.cut(scope['tmax'], range(-10, 106, 10)),
+    values='dep_delay',
+    aggfunc=['mean', 'count']
+)
+delay_by_tmax_df
+
+flight_df.loc[flight_df['tmax'] < 0 ]['tmax'].unique()
+
+flight_df = flight_df.loc[flight_df['tmax'] > 0]
+
+plt.bar(
+    x=delay_by_tmax_df.index.astype(str),
+    height=delay_by_tmax_df[('mean', 'dep_delay')],
+)
